@@ -182,11 +182,7 @@ def get_queries(args, writer):
         # Add location data to query
         query_list.append(builtin_queries.locations_query)
 
-    print('query_list: ', query_list)
-
     result = List(query_list) if len(query_list) > 1 else query_list[0]
-    print('Query: ', result)
-    print('Query: ', result.to_jvalue())
     return result
 
 
@@ -242,14 +238,26 @@ def _get_checkpoint_manager(args):
         return checkpoint_manager
 
 
+def force_lazy(lazy_result):
+    print("LAZY RESULTS", lazy_result)
+    if lazy_result is not None:
+        if isinstance(lazy_result, RepeatableIterator):
+            list(lazy_result) if lazy_result else lazy_result
+        else:
+            for nested_result in lazy_result:
+                force_lazy(nested_result)
+
+
 def evaluate_query(env, query):
     with env:
         try:
             lazy_result = query.eval(env)
-            if lazy_result is not None:
-                # evaluate lazy results
-                for r in lazy_result:
-                    list(r) if r else r
+            force_lazy(lazy_result)
+            # if lazy_result is not None:
+            #     # evaluate lazy results
+            #     print("LAZY RESULTS", lazy_result)
+            #     for r in lazy_result:
+            #         list(r) if r else r
         except requests.exceptions.RequestException as e:
             if e.response.status_code == 401:
                 print("\nAuthentication failed. Please check your credentials.")
