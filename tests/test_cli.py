@@ -51,7 +51,7 @@ def mock_hq_client(include_parent):
     return MockCommCareHqClient({
         'form': [
             (
-                {'limit': DEFAULT_BATCH_SIZE, 'order_by': ['server_modified_on', 'received_on']},
+                {'limit': DEFAULT_BATCH_SIZE, 'order_by': ['server_modified_on', 'received_on', 'indexed_on']},
                 [
                     {'id': 1, 'form': {'name': 'f1', 'case': {'@case_id': 'c1'}},
                      'metadata': {'userID': 'id1'}},
@@ -62,7 +62,7 @@ def mock_hq_client(include_parent):
         ],
         'case': [
             (
-                {'limit': DEFAULT_BATCH_SIZE, 'order_by': 'server_date_modified'},
+                {'limit': DEFAULT_BATCH_SIZE, 'order_by': ['server_date_modified', 'indexed_on']},
                 [
                     {'id': 'case1'},
                     {'id': 'case2'},
@@ -402,7 +402,7 @@ class TestCLIIntegrationTests(object):
 CONFLICTING_TYPES_CLIENT = MockCommCareHqClient({
     'form': [
         (
-            {'limit': DEFAULT_BATCH_SIZE, 'order_by': ['server_modified_on', 'received_on']},
+            {'limit': DEFAULT_BATCH_SIZE, 'order_by': ['server_modified_on', 'received_on', 'indexed_on']},
             [
                 {'id': 1, 'form': {'name': 'n1', 'count': 10}},
                 {'id': 2, 'form': {'name': 'f2', 'count': 'abc'}}

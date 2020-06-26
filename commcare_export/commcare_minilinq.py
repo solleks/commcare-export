@@ -24,49 +24,72 @@ class SimpleSinceParams(object):
 
     def __call__(self, since, until):
         params = {
-            self.start_param: since.isoformat()
+            self.start_param: [s.isoformat() for s in since]
         }
         if until:
-            params[self.end_param] = until.isoformat()
+            params[self.end_param] = [u.isoformat() for u in until]
         return params
 
 
 class FormFilterSinceParams(object):
     def __call__(self, since, until):
-        range_expression = {}
+        print(since, until)
+        assert since is None or isinstance(since, list)
+        assert until is None or isinstance(until, list)
+
+        print('since', since)
+        print('until', until)
+
+        # since and until should be lists of two times [mod_recv_time, indexed_on]
+        # where mod_recv_time may correspond either to server_modified_on or received_on.
+        mod_recv_range_expression = {}
+        indexed_range_expression = {}
         if since:
-            range_expression['gte'] = since.isoformat()
+            mod_recv_range_expression['gte'] = since[0].isoformat()
+            if len(since) > 1:
+                indexed_range_expression['gte'] = since[1].isoformat()
 
         if until:
-            range_expression['lte'] = until.isoformat()
+            mod_recv_range_expression['lte'] = until[0].isoformat()
+            if len(until) > 1:
+                indexed_range_expression['lte'] = until[1].isoformat()
 
         server_modified_missing = {"missing": {
             "field": "server_modified_on", "null_value": True, "existence": True}
         }
         query = json.dumps({
             'filter': {
-                "or": [
+                "and": [
                     {
-                        "and": [
+                        "or": [
                             {
-                                "not": server_modified_missing
+                                "and": [
+                                    {
+                                        "not": server_modified_missing
+                                    },
+                                    {
+                                        "range": {
+                                            "server_modified_on": mod_recv_range_expression
+                                        }
+                                    }
+                                ]
                             },
                             {
-                                "range": {
-                                    "server_modified_on": range_expression
-                                }
+                                "and": [
+                                    server_modified_missing,
+                                    {
+                                        "range": {
+                                            "received_on": mod_recv_range_expression
+                                        }
+                                    }
+                                ]
                             }
                         ]
                     },
                     {
-                        "and": [
-                            server_modified_missing,
-                            {
-                                "range": {
-                                    "received_on": range_expression
-                                }
-                            }
-                        ]
+                        "range": {
+                            "indexed_on": indexed_range_expression
+                        }
                     }
                 ]
             }})
@@ -86,8 +109,11 @@ resource_since_params = {
 
 def get_paginator(resource, page_size=1000):
     return {
-        'form': DatePaginator('form', ['server_modified_on','received_on'], page_size),
-        'case': DatePaginator('case', 'server_date_modified', page_size),
+        # TODO(Charlie): Confirm that 'indexed_on' should not be used as the since_field
+        # because one of the previous fields should always be present. It will only
+        # be used as the final ordering field.
+        'form': DatePaginator('form', [('server_modified_on','received_on'), 'indexed_on'], page_size),
+        'case': DatePaginator('case', ['server_date_modified', 'indexed_on'], page_size),
         'user': SimplePaginator('user', page_size),
         'location': SimplePaginator('location', page_size),
         'application': SimplePaginator('application', page_size),
@@ -115,8 +141,9 @@ class CommCareHqEnv(DictEnv):
             raise ValueError('I do not know how to access the API resource "%s"' % resource)
 
         paginator = get_paginator(resource, self.page_size)
-        paginator.init(payload, include_referenced_items, self.until)
-        initial_params = paginator.next_page_params_since(checkpoint_manager.since_param)
+        paginator.init(payload, include_referenced_items, [self.until] if self.until is not None else None)
+        since_param = [checkpoint_manager.since_param] if checkpoint_manager.since_param is not None else None
+        initial_params = paginator.next_page_params_since(since_param)
         return self.commcare_hq_client.iterate(
             resource, paginator,
             params=initial_params, checkpoint_manager=checkpoint_manager
@@ -142,6 +169,11 @@ class SimplePaginator(object):
         self.include_referenced_items = include_referenced_items
         self.until = until
 
+    # TODO(Charlie): When using 'indexed_on' the order key and since/until keys become
+    # tuples. The command line arguments may only be the first part of the tuple.
+    # What is the since/until param pulled from the batch? See get_since_date for
+    # DatePaginator, it is the first field found in the object. We would change that
+    # to the tuple of all fields found in the object, in the order given in since_field.
     def next_page_params_since(self, since=None):
         params = self.payload
         params['limit'] = self.page_size
@@ -181,7 +213,13 @@ class DatePaginator(SimplePaginator):
 
     def next_page_params_since(self, since=None):
         params = super(DatePaginator, self).next_page_params_since(since)
-        params['order_by'] = self.since_field
+        params['order_by'] = []
+        for sf in self.since_field:
+            if isinstance(sf, tuple):
+                for ssf in sf:
+                    params['order_by'].append(ssf)
+            else:
+                params['order_by'].append(sf)
         return params
 
     def next_page_params_from_batch(self, batch):
@@ -195,18 +233,29 @@ class DatePaginator(SimplePaginator):
         except IndexError:
             return
 
-        if last_obj:
-            if isinstance(self.since_field, list):
-                for field in self.since_field:
-                    since = last_obj.get(field)
-                    if since:
-                        break
-            else:
-                since = last_obj.get(self.since_field)
-
-            if since:
+        def parse_timestamp(ts):
+            if ts:
                 for fmt in ('%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%dT%H:%M:%S.%fZ'):
                     try:
-                        return datetime.strptime(since, fmt)
+                        return datetime.strptime(ts, fmt)
                     except ValueError:
                         pass
+
+        # desc can be a single field, which is either found or None, or a tuple,
+        # which means take the first available sub-field.
+        def get_field(desc):
+            if isinstance(desc, tuple):
+                for sub_desc in desc:
+                    maybe_ts = get_field(sub_desc)
+                    if maybe_ts:
+                        return maybe_ts
+            else:
+                return parse_timestamp(last_obj.get(desc))
+                    
+        if last_obj:
+            since = []
+            for field in self.since_field:
+                maybe_ts = get_field(field)
+                if maybe_ts:
+                    since.append(maybe_ts)
+            return since if len(since) > 0 else None

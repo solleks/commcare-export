@@ -109,9 +109,10 @@ class CommCareHqClient(object):
         for this particular use case in the hands of a trusted user; would likely
         want this to work like (or via) slumber.
         """
-        logger.debug("Fetching '%s' batch: %s", resource, params)
+        print("Fetching '%s' batch: %s", resource, params)
         resource_url = '%s/%s/' % (self.api_url, resource)
         response = self.session.get(resource_url, params=params, auth=self.__auth, timeout=60)
+        print("Returned batch:", response.json())
         response.raise_for_status()
         return response.json()
             

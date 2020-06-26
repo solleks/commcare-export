@@ -47,7 +47,7 @@ class FakeDateCaseSession(FakeSession):
             }
         else:
             since_query_param =resource_since_params['case'].start_param
-            assert params[since_query_param] == '2017-01-01T15:36:22'
+            assert params[since_query_param] == ['2017-01-01T15:36:22']
             # include ID=1 again to make sure it gets filtered out
             return {
                 'meta': { 'next': None, 'offset': 1, 'limit': 1, 'total_count': 2 },
@@ -68,7 +68,7 @@ class FakeRepeatedDateCaseSession(FakeSession):
             }
         else:
             since_query_param =resource_since_params['case'].start_param
-            assert params[since_query_param] == '2017-01-01T15:36:22'
+            assert params[since_query_param] == ['2017-01-01T15:36:22']
             return {
                 'meta': { 'next': '?offset=1', 'offset': 0, 'limit': 2, 'total_count': 4},
                 'objects': [{'id': 1, 'foo': 1, 'server_date_modified': '2017-01-01T15:36:22Z'},
@@ -87,7 +87,8 @@ class FakeDateFormSession(FakeSession):
             }
         else:
             search = json.loads(params['_search'])
-            _or = search['filter']['or']
+            print(search)
+            _or = search['filter']['and'][0]['or']
             received_on = _or[1]['and'][1]['range']['received_on']['gte']
             modified_on = _or[0]['and'][1]['range']['server_modified_on']['gte']
             if received_on == modified_on == since1:
@@ -148,17 +149,37 @@ class TestDatePaginator(unittest.TestCase):
     def test_multi_field_sort(self):
         d1 = '2017-01-01T15:36:22Z'
         d2 = '2017-01-01T18:36:22Z'
-        self.assertEqual(DatePaginator('fake', ['s1', 's2']).get_since_date({'objects': [{
+        d3 = '2017-01-01T21:36:22Z'
+        self.assertEqual(DatePaginator('fake', [('s1', 's2')]).get_since_date({'objects': [{
             's1': d1,
             's2': d2
-        }]}), datetime.strptime(d1, '%Y-%m-%dT%H:%M:%SZ'))
+        }]}), [datetime.strptime(d1, '%Y-%m-%dT%H:%M:%SZ')])
 
-        self.assertEqual(DatePaginator('fake', ['s1', 's2']).get_since_date({'objects': [{
+        self.assertEqual(DatePaginator('fake', [('s1', 's2')]).get_since_date({'objects': [{
             's2': d2
-        }]}), datetime.strptime(d2, '%Y-%m-%dT%H:%M:%SZ'))
+        }]}), [datetime.strptime(d2, '%Y-%m-%dT%H:%M:%SZ')])
 
-        self.assertEqual(DatePaginator('fake', ['s1', 's2']).get_since_date({'objects': [{
+        self.assertEqual(DatePaginator('fake', [('s1', 's2')]).get_since_date({'objects': [{
             's1': None,
             's2': d2
-        }]}), datetime.strptime(d2, '%Y-%m-%dT%H:%M:%SZ'))
+        }]}), [datetime.strptime(d2, '%Y-%m-%dT%H:%M:%SZ')])
+        self.assertEqual(DatePaginator('fake', [('s1', 's2'), 's3']).get_since_date({'objects': [{
+            's1': d1,
+            's2': d2,
+            's3': d3
+        }]}), [datetime.strptime(d1, '%Y-%m-%dT%H:%M:%SZ'),
+               datetime.strptime(d3, '%Y-%m-%dT%H:%M:%SZ')])
+
+        self.assertEqual(DatePaginator('fake', [('s1', 's2'), 's3']).get_since_date({'objects': [{
+            's2': d2,
+            's3': d3
+        }]}), [datetime.strptime(d2, '%Y-%m-%dT%H:%M:%SZ'),
+               datetime.strptime(d3, '%Y-%m-%dT%H:%M:%SZ')])
+
+        self.assertEqual(DatePaginator('fake', [('s1', 's2'), 's3']).get_since_date({'objects': [{
+            's1': None,
+            's2': d2,
+            's3': d3
+        }]}), [datetime.strptime(d2, '%Y-%m-%dT%H:%M:%SZ'),
+               datetime.strptime(d3, '%Y-%m-%dT%H:%M:%SZ')])
 
